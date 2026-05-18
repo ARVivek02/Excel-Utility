@@ -6,12 +6,10 @@ const FileUpload = ({ onDataParsed }) => {
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
-  // Core logic to read both .xls and .xlsx
   const processFile = (file) => {
     setError('');
     
-    // Check if it's a valid Excel format
-    const validExtensions = ['xlsx', 'xls'];
+    const validExtensions = ['xlsx', 'xls', 'csv'];
     const fileExtension = file.name.split('.').pop().toLowerCase();
 
     if (!validExtensions.includes(fileExtension)) {
@@ -21,39 +19,69 @@ const FileUpload = ({ onDataParsed }) => {
 
     setIsLoading(true);
 
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const data = new Uint8Array(e.target.result);
-        
-        // This single line reads BOTH .xls and .xlsx perfectly into memory
-        const workbook = XLSX.read(data, { type: 'array' });
-        
-        const firstSheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[firstSheetName];
-        
-        // Convert the sheet into a JSON array for our app to use
-        const jsonData = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
-        
-        if (jsonData.length === 0) {
-          setError('The uploaded Excel file appears to be empty.');
-          setIsLoading(false);
-          return;
-        }
-
-        onDataParsed(jsonData);
-      } catch (err) {
-        console.error("Excel parsing error:", err);
-        setError('Failed to read the file. It might be corrupted.');
+    // Helper function to process the workbook once successfully read
+    const extractDataFromWorkbook = (workbook) => {
+      const firstSheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[firstSheetName];
+      const jsonData = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
+      
+      if (jsonData.length === 0) {
+        setError('The uploaded Excel file appears to be empty.');
         setIsLoading(false);
+        return;
       }
+      onDataParsed(jsonData);
     };
-    reader.onerror = () => {
-      setError('A browser error occurred while reading the file.');
-      setIsLoading(false);
+
+    // ATTEMPT 3: Raw UTF-8 Text (Catches XML Spreadsheet 2003 and HTML disguised as .xls)
+    const attempt3Text = () => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const workbook = XLSX.read(e.target.result, { type: 'string' });
+          extractDataFromWorkbook(workbook);
+        } catch (err) {
+          console.error("All 3 parsing attempts failed:", err);
+          setError('Failed to read the file. The format is severely corrupted or strictly proprietary.');
+          setIsLoading(false);
+        }
+      };
+      reader.readAsText(file);
     };
-    
-    reader.readAsArrayBuffer(file);
+
+    // ATTEMPT 2: Binary String (Catches some older legacy Excel formats)
+    const attempt2Binary = () => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const workbook = XLSX.read(e.target.result, { type: 'binary' });
+          extractDataFromWorkbook(workbook);
+        } catch (err) {
+          console.warn("Attempt 2 (Binary) failed. Trying Attempt 3 (Raw Text)...");
+          attempt3Text();
+        }
+      };
+      reader.readAsBinaryString(file);
+    };
+
+    // ATTEMPT 1: Standard ArrayBuffer (Best for standard .xlsx and standard .xls)
+    const attempt1ArrayBuffer = () => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const data = new Uint8Array(e.target.result);
+          const workbook = XLSX.read(data, { type: 'array' });
+          extractDataFromWorkbook(workbook);
+        } catch (err) {
+          console.warn("Attempt 1 (ArrayBuffer) failed. Trying Attempt 2 (Binary String)...");
+          attempt2Binary();
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    };
+
+    // Start the chain of attempts
+    attempt1ArrayBuffer();
   };
 
   const handleDragOver = (e) => {
@@ -87,7 +115,7 @@ const FileUpload = ({ onDataParsed }) => {
         📂 Load Master Data
       </h2>
       <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1.5rem', textAlign: 'left' }}>
-        Upload your master spreadsheet to begin searching. We automatically convert legacy .xls files to modern formats in memory.
+        Upload your master spreadsheet to begin searching. We automatically bypass "unsafe file" formatting errors using a 3-tier parsing engine.
       </p>
 
       <div 
@@ -102,7 +130,7 @@ const FileUpload = ({ onDataParsed }) => {
         </div>
         
         {isLoading ? (
-          <h3 style={{ color: 'var(--text-main)', fontSize: '1.1rem' }}>Parsing File...</h3>
+          <h3 style={{ color: 'var(--text-main)', fontSize: '1.1rem' }}>Parsing File & Bypassing Errors...</h3>
         ) : (
           <>
             <h3 style={{ color: 'var(--text-main)', fontSize: '1.1rem', marginBottom: '0.5rem' }}>
@@ -111,11 +139,10 @@ const FileUpload = ({ onDataParsed }) => {
             <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
               or click to browse from your computer
             </p>
-            {/* Explicitly accepting both extensions here */}
             <input 
               id="file-upload-input"
               type="file" 
-              accept=".xlsx, .xls, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel" 
+              accept=".xlsx, .xls, .csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel, text/csv" 
               style={{ display: 'none' }} 
               onChange={handleFileInput}
             />
